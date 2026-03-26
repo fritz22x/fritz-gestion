@@ -98,6 +98,39 @@ function toFormState(item: ItemRecord): ItemFormState {
   };
 }
 
+function normalizeTargetDate(value: string) {
+  return value.trim();
+}
+
+function isValidTargetDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+function getTargetDateValue(value: string) {
+  const normalizedValue = normalizeTargetDate(value);
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  if (!isValidTargetDate(normalizedValue)) {
+    throw new Error("La fecha objetivo debe tener un formato valido (AAAA-MM-DD).");
+  }
+
+  return normalizedValue;
+}
+
 function buildItemPayload(form: ItemFormState) {
   return {
     module_id: form.moduleId || null,
@@ -107,7 +140,7 @@ function buildItemPayload(form: ItemFormState) {
     description: form.description.trim() || null,
     status: form.status,
     priority: form.priority,
-    target_date: form.targetDate || null,
+    target_date: getTargetDateValue(form.targetDate),
     next_step: form.nextStep.trim() || null,
   };
 }
@@ -129,6 +162,7 @@ export default function ItemsPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -397,6 +431,49 @@ export default function ItemsPage() {
     }
   }
 
+  async function handleDeleteItem(item: ItemRecord) {
+    if (deletingItemId) {
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        `Vas a eliminar el item "${item.title}". Esta accion no se puede deshacer.`
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setDeletingItemId(item.id);
+    setError(null);
+    setFormError(null);
+    setSuccessMessage(null);
+
+    try {
+      const { error: deleteError } = await supabase.from("items").delete().eq("id", item.id);
+
+      if (deleteError) {
+        throw new Error(deleteError.message);
+      }
+
+      await refreshItems();
+
+      if (editingItemId === item.id) {
+        resetCreateForm(item.module_id || modules[0]?.id || "");
+      }
+
+      setSuccessMessage("Item eliminado correctamente.");
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "No se pudo eliminar el item.";
+      setError(message);
+    } finally {
+      setDeletingItemId(null);
+    }
+  }
+
   function startEditing(item: ItemRecord) {
     setEditingItemId(item.id);
     setFormError(null);
@@ -525,13 +602,28 @@ export default function ItemsPage() {
                 </div>
 
                 {editingItemId && (
-                  <button
-                    type="button"
-                    onClick={cancelEditing}
-                    className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
-                  >
-                    Cancelar
-                  </button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentItem = items.find((item) => item.id === editingItemId);
+                        if (currentItem) {
+                          void handleDeleteItem(currentItem);
+                        }
+                      }}
+                      disabled={deletingItemId === editingItemId}
+                      className="rounded-xl border border-red-500/40 px-3 py-2 text-sm text-red-200 transition hover:border-red-400 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {deletingItemId === editingItemId ? "Eliminando..." : "Eliminar"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditing}
+                      className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -629,12 +721,17 @@ export default function ItemsPage() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Fecha objetivo">
-                    <input
-                      type="date"
-                      value={form.targetDate}
-                      onChange={(event) => updateForm("targetDate", event.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500"
-                    />
+                    <div className="space-y-2">
+                      <input
+                        type="date"
+                        value={form.targetDate}
+                        onChange={(event) => updateForm("targetDate", event.target.value)}
+                        className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500"
+                      />
+                      <p className="text-xs text-slate-400">
+                        Opcional. Si no la completas, el item se guarda sin fecha objetivo.
+                      </p>
+                    </div>
                   </Field>
 
                   <Field label="Siguiente paso">
@@ -793,6 +890,14 @@ export default function ItemsPage() {
                             >
                               {isEditing ? "Editando" : "Editar"}
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteItem(item)}
+                              disabled={deletingItemId === item.id}
+                              className="rounded-xl border border-red-500/40 px-4 py-3 text-sm text-red-200 transition hover:border-red-400 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingItemId === item.id ? "Eliminando..." : "Eliminar"}
+                            </button>
                           </div>
                         </div>
 
@@ -828,6 +933,7 @@ function Field({
     </label>
   );
 }
+
 
 
 
