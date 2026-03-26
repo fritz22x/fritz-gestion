@@ -440,6 +440,12 @@ export default function ItemsPage() {
               </div>
             )}
             <Link
+              href="/logs"
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+            >
+              Ir a bitacora
+            </Link>
+            <Link
               href="/"
               className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
             >
@@ -797,6 +803,7 @@ function Field({
     </label>
   );
 }
+
 
 
 

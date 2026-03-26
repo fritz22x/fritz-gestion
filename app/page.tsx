@@ -91,12 +91,20 @@ export default function HomePage() {
           </div>
 
           <div className="flex flex-col items-start gap-3 sm:items-end">
-            <Link
-              href="/items"
-              className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
-            >
-              Ver items
-            </Link>
+            <div className="flex flex-wrap gap-3 sm:justify-end">
+              <Link
+                href="/items"
+                className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+              >
+                Ver items
+              </Link>
+              <Link
+                href="/logs"
+                className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+              >
+                Ver bitacora
+              </Link>
+            </div>
             {isLoggedIn ? (
               <>
                 <div className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-2 text-sm text-slate-300">
@@ -194,3 +202,4 @@ export default function HomePage() {
     </main>
   );
 }
+
