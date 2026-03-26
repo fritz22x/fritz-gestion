@@ -86,6 +86,17 @@ function formatStatusLabel(value: ResultingStatus) {
   return value === "en_proceso" ? "En proceso" : capitalize(value);
 }
 
+function getCompletedAtValue(
+  nextStatus: ResultingStatus,
+  currentCompletedAt: string | null
+) {
+  if (nextStatus === "hecho") {
+    return currentCompletedAt ?? new Date().toISOString();
+  }
+
+  return null;
+}
+
 export default function LogsPage() {
   const supabase = createSupabaseBrowserClient();
   const [requestedModuleId, setRequestedModuleId] = useState<string | null>(null);
@@ -334,6 +345,45 @@ export default function LogsPage() {
 
       if (insertError) {
         throw new Error(insertError.message);
+      }
+
+      if (payload.item_id) {
+        const { data: currentItem, error: currentItemError } = await supabase
+          .from("items")
+          .select("id, completed_at")
+          .eq("id", payload.item_id)
+          .single();
+
+        if (currentItemError) {
+          throw new Error(currentItemError.message);
+        }
+
+        const itemUpdatePayload: {
+          last_progress: string;
+          next_step?: string | null;
+          status: ResultingStatus;
+          completed_at: string | null;
+        } = {
+          last_progress: payload.progress_today,
+          status: payload.resulting_status,
+          completed_at: getCompletedAtValue(
+            payload.resulting_status,
+            currentItem?.completed_at ?? null
+          ),
+        };
+
+        if (payload.next_step) {
+          itemUpdatePayload.next_step = payload.next_step;
+        }
+
+        const { error: syncError } = await supabase
+          .from("items")
+          .update(itemUpdatePayload)
+          .eq("id", payload.item_id);
+
+        if (syncError) {
+          throw new Error(syncError.message);
+        }
       }
 
       await refreshLogs();
@@ -671,6 +721,8 @@ function InfoCard({
     </div>
   );
 }
+
+
 
 
 
