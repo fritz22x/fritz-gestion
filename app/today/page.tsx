@@ -39,6 +39,15 @@ type LogItemRef = {
   title: string;
 };
 
+type RecentItemActivity = {
+  itemId: string;
+  moduleId: string | null;
+  title: string;
+  logDate: string;
+  progressToday: string;
+  nextStep: string | null;
+};
+
 const statusClasses: Record<ItemStatus, string> = {
   pendiente: "border-amber-500/30 bg-amber-500/10 text-amber-200",
   en_proceso: "border-cyan-500/30 bg-cyan-500/10 text-cyan-200",
@@ -167,7 +176,7 @@ export default function TodayPage() {
           .select("id, module_id, item_id, log_date, progress_today, next_step, created_at")
           .order("log_date", { ascending: false })
           .order("created_at", { ascending: false })
-          .limit(6),
+          .limit(12),
       ]);
 
       if (!mounted) return;
@@ -258,6 +267,39 @@ export default function TodayPage() {
     [items, nearReviewLimit]
   );
 
+  const linkedLogs = useMemo(() => logs.filter((log) => Boolean(log.item_id)), [logs]);
+
+  const latestWorkedLog = linkedLogs[0] ?? null;
+
+  const recentItemActivity = useMemo(() => {
+    const seenItemIds = new Set<string>();
+    const recentItems: RecentItemActivity[] = [];
+
+    for (const log of linkedLogs) {
+      if (!log.item_id || seenItemIds.has(log.item_id)) {
+        continue;
+      }
+
+      seenItemIds.add(log.item_id);
+      recentItems.push({
+        itemId: log.item_id,
+        moduleId: log.module_id,
+        title: getItemTitleFromRefs(log.item_id, logItems),
+        logDate: log.log_date,
+        progressToday: log.progress_today,
+        nextStep: log.next_step,
+      });
+
+      if (recentItems.length === 3) {
+        break;
+      }
+    }
+
+    return recentItems;
+  }, [linkedLogs, logItems]);
+
+  const visibleRecentLogs = useMemo(() => logs.slice(0, 6), [logs]);
+
   function getModuleName(moduleId: string | null) {
     if (!moduleId) return "Sin modulo";
     return modules.find((module) => module.id === moduleId)?.name || "Modulo no disponible";
@@ -265,16 +307,26 @@ export default function TodayPage() {
 
   function getItemTitle(itemId: string | null) {
     if (!itemId) return "Sin item vinculado";
-    return logItems.find((item) => item.id === itemId)?.title || "Item no disponible";
+    return getItemTitleFromRefs(itemId, logItems);
+  }
+
+  function getLogHrefFromContext(moduleId: string | null, itemId: string | null) {
+    const params = new URLSearchParams();
+
+    if (moduleId) {
+      params.set("module", moduleId);
+    }
+
+    if (itemId) {
+      params.set("item", itemId);
+    }
+
+    const query = params.toString();
+    return query ? `/logs?${query}` : "/logs";
   }
 
   function getLogHref(item: TodayItem) {
-    const params = new URLSearchParams();
-    if (item.module_id) {
-      params.set("module", item.module_id);
-    }
-    params.set("item", item.id);
-    return `/logs?${params.toString()}`;
+    return getLogHrefFromContext(item.module_id, item.id);
   }
 
   async function handleQuickStatusChange(item: TodayItem, nextStatus: ItemStatus) {
@@ -398,6 +450,126 @@ export default function TodayPage() {
               <SummaryCard label="Revision cercana" value={reviewItems.length} accent="text-emerald-400" />
             </section>
 
+            <section className="mb-6 rounded-3xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
+              <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.18em] text-slate-500">Continuidad</p>
+                  <h2 className="mt-2 text-2xl font-semibold">Retomar trabajo</h2>
+                  <p className="mt-2 max-w-3xl text-sm text-slate-300">
+                    Encuentra rapido el ultimo item trabajado y una lista corta de actividad reciente para volver al flujo.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Link
+                    href="/logs"
+                    className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
+                  >
+                    Ver bitacora
+                  </Link>
+                  <Link
+                    href="/items"
+                    className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-950"
+                  >
+                    Ver items
+                  </Link>
+                </div>
+              </div>
+
+              {latestWorkedLog?.item_id ? (
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                  <article className="rounded-2xl border border-cyan-500/20 bg-slate-950/70 p-5">
+                    <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Ultimo item trabajado</p>
+                    <p className="mt-3 text-xs uppercase tracking-[0.16em] text-slate-500">
+                      {latestWorkedLog.log_date} · {getModuleName(latestWorkedLog.module_id)}
+                    </p>
+                    <h3 className="mt-2 text-2xl font-semibold text-white">
+                      {getItemTitle(latestWorkedLog.item_id)}
+                    </h3>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <InfoPanel label="Ultimo avance">{latestWorkedLog.progress_today}</InfoPanel>
+                      <InfoPanel label="Siguiente paso">
+                        {latestWorkedLog.next_step || "Sin siguiente paso definido"}
+                      </InfoPanel>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Link
+                        href={`/items?item=${latestWorkedLog.item_id}`}
+                        className="rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+                      >
+                        Retomar
+                      </Link>
+                      <Link
+                        href={getLogHrefFromContext(latestWorkedLog.module_id, latestWorkedLog.item_id)}
+                        className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+                      >
+                        Crear log
+                      </Link>
+                    </div>
+                  </article>
+
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Actividad reciente</p>
+                    <h3 className="mt-2 text-lg font-semibold text-white">Ultimos 3 items con movimiento</h3>
+
+                    <div className="mt-4 grid gap-3">
+                      {recentItemActivity.map((activity) => (
+                        <article
+                          key={activity.itemId}
+                          className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4"
+                        >
+                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                            {activity.logDate} · {getModuleName(activity.moduleId)}
+                          </p>
+                          <h4 className="mt-2 text-base font-semibold text-white">{activity.title}</h4>
+                          <p className="mt-2 text-sm text-slate-300">{activity.progressToday}</p>
+                          <p className="mt-3 text-sm text-slate-400">
+                            Siguiente paso: {activity.nextStep || "Sin siguiente paso definido"}
+                          </p>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <Link
+                              href={`/items?item=${activity.itemId}`}
+                              className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-950"
+                            >
+                              Ver item
+                            </Link>
+                            <Link
+                              href={getLogHrefFromContext(activity.moduleId, activity.itemId)}
+                              className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
+                            >
+                              Crear log
+                            </Link>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center text-sm text-slate-400">
+                  <p className="text-base font-medium text-slate-200">Aun no hay continuidad vinculada a items.</p>
+                  <p className="mt-2">
+                    Crea un log asociado a un item para que Hoy pueda ayudarte a retomar trabajo mas rapido.
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <Link
+                      href="/items"
+                      className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-900"
+                    >
+                      Ir a items
+                    </Link>
+                    <Link
+                      href="/logs"
+                      className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+                    >
+                      Registrar log
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </section>
+
             <div className="grid gap-6 xl:grid-cols-2">
               <SectionBlock
                 title="Items en proceso"
@@ -469,17 +641,17 @@ export default function TodayPage() {
                   <h2 className="mt-2 text-2xl font-semibold">Ultimos logs</h2>
                 </div>
                 <span className="rounded-full border border-slate-700 px-3 py-1 text-sm text-slate-300">
-                  {logs.length} visibles
+                  {visibleRecentLogs.length} visibles
                 </span>
               </div>
 
-              {logs.length === 0 ? (
+              {visibleRecentLogs.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center text-sm text-slate-400">
                   Aun no tienes logs recientes. Registra una sesion para reforzar continuidad.
                 </div>
               ) : (
                 <div className="grid gap-4 lg:grid-cols-2">
-                  {logs.map((log) => (
+                  {visibleRecentLogs.map((log) => (
                     <article
                       key={log.id}
                       className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
@@ -506,6 +678,25 @@ export default function TodayPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function getItemTitleFromRefs(itemId: string, logItems: LogItemRef[]) {
+  return logItems.find((item) => item.id === itemId)?.title || "Item no disponible";
+}
+
+function InfoPanel({
+  label,
+  children,
+}: Readonly<{
+  label: string;
+  children: React.ReactNode;
+}>) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 text-sm text-slate-300">
+      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{label}</p>
+      <p className="mt-2">{children}</p>
+    </div>
   );
 }
 
@@ -737,3 +928,4 @@ function ReviewList({
     </div>
   );
 }
+
