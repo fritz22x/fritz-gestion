@@ -110,6 +110,12 @@ export default function HomePage() {
               >
                 Ver bitacora
               </Link>
+              <Link
+                href="/manual"
+                className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+              >
+                Ver manual
+              </Link>
             </div>
             {isLoggedIn ? (
               <>
@@ -208,5 +214,6 @@ export default function HomePage() {
     </main>
   );
 }
+
 
 

@@ -106,6 +106,7 @@ export default function LogsPage() {
   const [logs, setLogs] = useState<WorkLogRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingLogId, setDeletingLogId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -113,6 +114,7 @@ export default function LogsPage() {
   const [hasSession, setHasSession] = useState(false);
   const [form, setForm] = useState<LogFormState>(initialFormState);
   const [requestedItemId, setRequestedItemId] = useState<string | null>(null);
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -270,7 +272,9 @@ export default function LogsPage() {
       throw new Error(reloadError.message);
     }
 
-    setLogs((data ?? []) as WorkLogRecord[]);
+    const nextLogs = (data ?? []) as WorkLogRecord[];
+    setLogs(nextLogs);
+    return nextLogs;
   }
 
   function updateForm<K extends keyof LogFormState>(key: K, value: LogFormState[K]) {
@@ -285,6 +289,92 @@ export default function LogsPage() {
   function getItemTitle(itemId: string | null) {
     if (!itemId) return "Sin item vinculado";
     return items.find((item) => item.id === itemId)?.title || "Item no disponible";
+  }
+
+  function toFormState(log: WorkLogRecord): LogFormState {
+    return {
+      logDate: log.log_date,
+      moduleId: log.module_id || "",
+      itemId: log.item_id || "",
+      sessionType: log.session_type,
+      progressToday: log.progress_today,
+      whereIStopped: log.where_i_stopped || "",
+      nextStep: log.next_step || "",
+      timeSpentMinutes: log.time_spent_minutes?.toString() || "",
+      resultingStatus: log.resulting_status,
+    };
+  }
+
+  function resetCreateForm(nextModuleId?: string, nextItemId?: string) {
+    setEditingLogId(null);
+    setForm({
+      ...initialFormState,
+      logDate: new Date().toISOString().slice(0, 10),
+      moduleId: nextModuleId ?? requestedModuleId ?? modules[0]?.id ?? "",
+      itemId: nextItemId ?? requestedItemId ?? "",
+    });
+  }
+
+  function startEditing(log: WorkLogRecord) {
+    setEditingLogId(log.id);
+    setFormError(null);
+    setSuccessMessage(null);
+    setForm(toFormState(log));
+  }
+
+  function cancelEditing() {
+    setFormError(null);
+    setSuccessMessage(null);
+    resetCreateForm(
+      form.moduleId || requestedModuleId || modules[0]?.id || "",
+      requestedItemId || ""
+    );
+  }
+
+  async function handleDeleteLog(log: WorkLogRecord) {
+    if (deletingLogId) {
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        `Vas a eliminar esta entrada de bitacora del ${log.log_date}. Esta accion no se puede deshacer.`
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setDeletingLogId(log.id);
+    setError(null);
+    setFormError(null);
+    setSuccessMessage(null);
+
+    try {
+      await supabase.from("work_logs").delete().eq("id", log.id).throwOnError();
+
+      await refreshLogs();
+
+      if (editingLogId === log.id) {
+        resetCreateForm(
+          log.module_id || requestedModuleId || modules[0]?.id || "",
+          requestedItemId || ""
+        );
+      }
+
+      if (requestedItemId === log.item_id) {
+        setRequestedItemId(null);
+      }
+
+      setSuccessMessage("Entrada de bitacora eliminada correctamente.");
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "No se pudo eliminar la entrada de bitacora.";
+      setError(message);
+    } finally {
+      setDeletingLogId(null);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -329,7 +419,6 @@ export default function LogsPage() {
       }
 
       const payload = {
-        user_id: user.id,
         module_id: form.moduleId,
         item_id: form.itemId || null,
         log_date: form.logDate,
@@ -341,61 +430,71 @@ export default function LogsPage() {
         resulting_status: form.resultingStatus,
       };
 
-      const { error: insertError } = await supabase.from("work_logs").insert(payload);
+      if (editingLogId) {
+        await supabase.from("work_logs").update(payload).eq("id", editingLogId).throwOnError();
 
-      if (insertError) {
-        throw new Error(insertError.message);
-      }
+        const refreshedLogs = await refreshLogs();
+        const updatedLog = refreshedLogs.find((log) => log.id === editingLogId);
 
-      if (payload.item_id) {
-        const { data: currentItem, error: currentItemError } = await supabase
-          .from("items")
-          .select("id, completed_at")
-          .eq("id", payload.item_id)
-          .single();
-
-        if (currentItemError) {
-          throw new Error(currentItemError.message);
+        if (updatedLog) {
+          setForm(toFormState(updatedLog));
         }
 
-        const itemUpdatePayload: {
-          last_progress: string;
-          next_step?: string | null;
-          status: ResultingStatus;
-          completed_at: string | null;
-        } = {
-          last_progress: payload.progress_today,
-          status: payload.resulting_status,
-          completed_at: getCompletedAtValue(
-            payload.resulting_status,
-            currentItem?.completed_at ?? null
-          ),
+        setSuccessMessage("Entrada de bitacora actualizada correctamente.");
+      } else {
+        const createPayload = {
+          user_id: user.id,
+          ...payload,
         };
 
-        if (payload.next_step) {
-          itemUpdatePayload.next_step = payload.next_step;
+        await supabase.from("work_logs").insert(createPayload).throwOnError();
+
+        if (createPayload.item_id) {
+          const { data: currentItem, error: currentItemError } = await supabase
+            .from("items")
+            .select("id, completed_at")
+            .eq("id", createPayload.item_id)
+            .single();
+
+          if (currentItemError) {
+            throw new Error(currentItemError.message);
+          }
+
+          const itemUpdatePayload: {
+            last_progress: string;
+            next_step?: string | null;
+            status: ResultingStatus;
+            completed_at: string | null;
+          } = {
+            last_progress: createPayload.progress_today,
+            status: createPayload.resulting_status,
+            completed_at: getCompletedAtValue(
+              createPayload.resulting_status,
+              currentItem?.completed_at ?? null
+            ),
+          };
+
+          if (createPayload.next_step) {
+            itemUpdatePayload.next_step = createPayload.next_step;
+          }
+
+          const { error: syncError } = await supabase
+            .from("items")
+            .update(itemUpdatePayload)
+            .eq("id", createPayload.item_id);
+
+          if (syncError) {
+            throw new Error(syncError.message);
+          }
         }
 
-        const { error: syncError } = await supabase
-          .from("items")
-          .update(itemUpdatePayload)
-          .eq("id", payload.item_id);
-
-        if (syncError) {
-          throw new Error(syncError.message);
-        }
+        await refreshLogs();
+        resetCreateForm(form.moduleId || requestedModuleId || modules[0]?.id || "", requestedItemId || "");
+        setSuccessMessage("Sesion registrada correctamente.");
       }
-
-      await refreshLogs();
-      setForm((current) => ({
-        ...initialFormState,
-        logDate: new Date().toISOString().slice(0, 10),
-        moduleId: current.moduleId || modules[0]?.id || "",
-      }));
-      setSuccessMessage("Sesion registrada correctamente.");
     } catch (caughtError) {
       const message =
-        caughtError instanceof Error ? caughtError.message : "No se pudo registrar la sesion.";
+        caughtError instanceof Error ? caughtError.message : "No se pudo guardar la bitacora.";
       setFormError(message);
     } finally {
       setSubmitting(false);
@@ -467,14 +566,30 @@ export default function LogsPage() {
         {!loading && !error && hasSession && (
           <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
             <section className="rounded-3xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
-              <div className="mb-5">
-                <p className="text-sm uppercase tracking-[0.18em] text-slate-500">
-                  Nueva sesion
-                </p>
-                <h2 className="mt-2 text-2xl font-semibold">Registrar bitacora</h2>
-                <p className="mt-2 text-sm text-slate-300">
-                  Guarda contexto suficiente para retomar trabajo sin friccion, tambien desde celular.
-                </p>
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.18em] text-slate-500">
+                    {editingLogId ? "Edicion" : "Nueva sesion"}
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold">
+                    {editingLogId ? "Editar bitacora" : "Registrar bitacora"}
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-300">
+                    {editingLogId
+                      ? "Ajusta la entrada de bitacora sin alterar el item relacionado."
+                      : "Guarda contexto suficiente para retomar trabajo sin friccion, tambien desde celular."}
+                  </p>
+                </div>
+
+                {editingLogId && (
+                  <button
+                    type="button"
+                    onClick={cancelEditing}
+                    className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
+                  >
+                    Cancelar
+                  </button>
+                )}
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -620,7 +735,7 @@ export default function LogsPage() {
                   disabled={submitting}
                   className="w-full rounded-xl bg-cyan-500 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {submitting ? "Guardando sesion..." : "Registrar sesion"}
+                  {submitting ? (editingLogId ? "Guardando cambios..." : "Guardando sesion...") : editingLogId ? "Guardar cambios" : "Registrar sesion"}
                 </button>
               </form>
             </section>
@@ -629,7 +744,7 @@ export default function LogsPage() {
               <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm uppercase tracking-[0.18em] text-slate-500">
-                    Historial reciente
+                    Bitacora reciente
                   </p>
                   <h2 className="mt-2 text-2xl font-semibold">Sesiones registradas</h2>
                 </div>
@@ -644,44 +759,63 @@ export default function LogsPage() {
                 </div>
               ) : (
                 <div className="grid gap-4">
-                  {logs.map((log) => (
-                    <article
-                      key={log.id}
-                      className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
-                    >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                            {log.log_date} · {getModuleName(log.module_id)}
-                          </p>
-                          <h3 className="mt-2 text-lg font-semibold text-white">
-                            {formatSessionType(log.session_type)}
-                          </h3>
-                          <p className="mt-2 text-sm text-slate-300">{log.progress_today}</p>
+                  {logs.map((log) => {
+                    const isEditing = editingLogId === log.id;
+
+                    return (
+                      <article
+                        key={log.id}
+                        className={`rounded-2xl border p-5 transition ${isEditing ? "border-cyan-500/40 bg-slate-950" : "border-slate-800 bg-slate-950/70 hover:border-slate-700"}`}
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                              {log.log_date} · {getModuleName(log.module_id)}
+                            </p>
+                            <h3 className="mt-2 text-lg font-semibold text-white">
+                              {formatSessionType(log.session_type)}
+                            </h3>
+                            <p className="mt-2 text-sm text-slate-300">{log.progress_today}</p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 lg:justify-end">
+                            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-200">
+                              {log.time_spent_minutes ? `${log.time_spent_minutes} min` : "Sin tiempo"}
+                            </span>
+                            <span
+                              className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClasses[log.resulting_status]}`}
+                            >
+                              {formatStatusLabel(log.resulting_status)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => startEditing(log)}
+                              className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-200 transition hover:border-cyan-500 hover:bg-slate-900"
+                            >
+                              {isEditing ? "Editando" : "Editar"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteLog(log)}
+                              disabled={deletingLogId === log.id}
+                              className="rounded-full border border-red-500/40 px-3 py-1 text-xs font-medium text-red-200 transition hover:border-red-400 hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingLogId === log.id ? "Eliminando..." : "Eliminar"}
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-200">
-                            {log.time_spent_minutes ? `${log.time_spent_minutes} min` : "Sin tiempo"}
-                          </span>
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClasses[log.resulting_status]}`}
-                          >
+                        <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2 xl:grid-cols-4">
+                          <InfoCard label="Item">{getItemTitle(log.item_id)}</InfoCard>
+                          <InfoCard label="Siguiente paso">{log.next_step || "Sin definir"}</InfoCard>
+                          <InfoCard label="Donde me quede">{log.where_i_stopped || "Sin detalle"}</InfoCard>
+                          <InfoCard label="Estado resultante">
                             {formatStatusLabel(log.resulting_status)}
-                          </span>
+                          </InfoCard>
                         </div>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2 xl:grid-cols-4">
-                        <InfoCard label="Item">{getItemTitle(log.item_id)}</InfoCard>
-                        <InfoCard label="Siguiente paso">{log.next_step || "Sin definir"}</InfoCard>
-                        <InfoCard label="Donde me quede">{log.where_i_stopped || "Sin detalle"}</InfoCard>
-                        <InfoCard label="Estado resultante">
-                          {formatStatusLabel(log.resulting_status)}
-                        </InfoCard>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </section>

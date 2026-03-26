@@ -412,7 +412,7 @@ export default function TodayPage() {
           <div className="mb-8 rounded-2xl border border-amber-500/30 bg-amber-950/30 p-5 text-amber-100">
             <p className="text-base font-semibold">No hay una sesion activa.</p>
             <p className="mt-2 text-sm text-amber-50/80">
-              Inicia sesion para ver tu foco diario, items activos y logs recientes.
+              Inicia sesion para ver tu foco diario, items activos y bitacora reciente.
             </p>
             <Link
               href="/login"
@@ -504,7 +504,7 @@ export default function TodayPage() {
                         href={getLogHrefFromContext(latestWorkedLog.module_id, latestWorkedLog.item_id)}
                         className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
                       >
-                        Crear log
+                        Registrar bitacora
                       </Link>
                     </div>
                   </article>
@@ -538,7 +538,7 @@ export default function TodayPage() {
                               href={getLogHrefFromContext(activity.moduleId, activity.itemId)}
                               className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
                             >
-                              Crear log
+                              Registrar bitacora
                             </Link>
                           </div>
                         </article>
@@ -550,7 +550,7 @@ export default function TodayPage() {
                 <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center text-sm text-slate-400">
                   <p className="text-base font-medium text-slate-200">Aun no hay continuidad vinculada a items.</p>
                   <p className="mt-2">
-                    Crea un log asociado a un item para que Hoy pueda ayudarte a retomar trabajo mas rapido.
+                    Registra una entrada de bitacora asociada a un item para que Hoy pueda ayudarte a retomar trabajo mas rapido.
                   </p>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
                     <Link
@@ -563,7 +563,7 @@ export default function TodayPage() {
                       href="/logs"
                       className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
                     >
-                      Registrar log
+                      Registrar bitacora
                     </Link>
                   </div>
                 </div>
@@ -647,7 +647,7 @@ export default function TodayPage() {
 
               {visibleRecentLogs.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center text-sm text-slate-400">
-                  Aun no tienes logs recientes. Registra una sesion para reforzar continuidad.
+                  Aun no tienes bitacora reciente. Registra una sesion para reforzar continuidad.
                 </div>
               ) : (
                 <div className="grid gap-4 lg:grid-cols-2">
@@ -839,7 +839,7 @@ function ItemList({
                   href={getLogHref(item)}
                   className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
                 >
-                  Crear log
+                  Registrar bitacora
                 </Link>
               </div>
             </div>
@@ -919,7 +919,7 @@ function ReviewList({
                 href={getLogHref(item)}
                 className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
               >
-                Crear log
+                Registrar bitacora
               </Link>
             </div>
           </article>
@@ -928,5 +928,7 @@ function ReviewList({
     </div>
   );
 }
+
+
 
 
