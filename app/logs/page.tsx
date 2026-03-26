@@ -88,6 +88,7 @@ function formatStatusLabel(value: ResultingStatus) {
 
 export default function LogsPage() {
   const supabase = createSupabaseBrowserClient();
+  const [requestedModuleId, setRequestedModuleId] = useState<string | null>(null);
 
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [items, setItems] = useState<ItemOption[]>([]);
@@ -100,6 +101,7 @@ export default function LogsPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(false);
   const [form, setForm] = useState<LogFormState>(initialFormState);
+  const [requestedItemId, setRequestedItemId] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -209,6 +211,40 @@ export default function LogsPage() {
     if (!form.moduleId) return items;
     return items.filter((item) => item.module_id === form.moduleId);
   }, [form.moduleId, items]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    setRequestedModuleId(params.get("module"));
+    setRequestedItemId(params.get("item"));
+  }, []);
+
+  useEffect(() => {
+    if (modules.length === 0 && items.length === 0) {
+      return;
+    }
+
+    setForm((current) => {
+      const nextModuleId =
+        requestedModuleId && modules.some((module) => module.id === requestedModuleId)
+          ? requestedModuleId
+          : current.moduleId;
+
+      const nextItemId =
+        requestedItemId && items.some((item) => item.id === requestedItemId)
+          ? requestedItemId
+          : current.itemId;
+
+      return {
+        ...current,
+        moduleId: nextModuleId,
+        itemId: nextItemId,
+      };
+    });
+  }, [items, modules, requestedItemId, requestedModuleId]);
 
   async function refreshLogs() {
     const { data, error: reloadError } = await supabase
@@ -635,6 +671,10 @@ function InfoCard({
     </div>
   );
 }
+
+
+
+
 
 
 

@@ -122,6 +122,7 @@ function getCompletedAtValue(nextStatus: ItemStatus, currentCompletedAt: string 
 
 export default function ItemsPage() {
   const supabase = createSupabaseBrowserClient();
+  const [requestedItemId, setRequestedItemId] = useState<string | null>(null);
 
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [items, setItems] = useState<ItemRecord[]>([]);
@@ -412,6 +413,30 @@ export default function ItemsPage() {
   function updateForm<K extends keyof ItemFormState>(key: K, value: ItemFormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    setRequestedItemId(params.get("item"));
+  }, []);
+
+  useEffect(() => {
+    if (!requestedItemId || items.length === 0 || editingItemId === requestedItemId) {
+      return;
+    }
+
+    const requestedItem = items.find((item) => item.id === requestedItemId);
+
+    if (requestedItem) {
+      setEditingItemId(requestedItem.id);
+      setFormError(null);
+      setSuccessMessage(null);
+      setForm(toFormState(requestedItem));
+    }
+  }, [editingItemId, items, requestedItemId]);
 
   function getModuleName(moduleId: string | null) {
     if (!moduleId) return "Sin modulo";
@@ -803,6 +828,10 @@ function Field({
     </label>
   );
 }
+
+
+
+
 
 
 

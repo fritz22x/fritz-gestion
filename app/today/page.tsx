@@ -21,6 +21,7 @@ type TodayItem = {
   next_step: string | null;
   target_date: string | null;
   next_review_at: string | null;
+  completed_at: string | null;
 };
 
 type TodayLog = {
@@ -68,15 +69,44 @@ function formatReviewLabel(item: TodayItem) {
   return item.target_date || "Sin fecha";
 }
 
+function getCompletedAtValue(nextStatus: ItemStatus, currentCompletedAt: string | null) {
+  if (nextStatus === "hecho") {
+    return currentCompletedAt || new Date().toISOString();
+  }
+
+  return null;
+}
+
 export default function TodayPage() {
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [items, setItems] = useState<TodayItem[]>([]);
   const [logs, setLogs] = useState<TodayLog[]>([]);
   const [logItems, setLogItems] = useState<LogItemRef[]>([]);
   const [loading, setLoading] = useState(true);
+  const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(false);
+
+  async function refreshItems() {
+    const supabase = createSupabaseBrowserClient();
+    const { data, error: reloadError } = await supabase
+      .from("items")
+      .select(
+        "id, module_id, title, status, priority, next_step, target_date, next_review_at, completed_at"
+      )
+      .order("created_at", { ascending: false });
+
+    if (reloadError) {
+      throw new Error(reloadError.message);
+    }
+
+    const nextItems = (data ?? []) as TodayItem[];
+    setItems(nextItems);
+    setLogItems(nextItems.map((item) => ({ id: item.id, title: item.title })));
+    return nextItems;
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -129,7 +159,7 @@ export default function TodayPage() {
         supabase
           .from("items")
           .select(
-            "id, module_id, title, status, priority, next_step, target_date, next_review_at"
+            "id, module_id, title, status, priority, next_step, target_date, next_review_at, completed_at"
           )
           .order("created_at", { ascending: false }),
         supabase
@@ -238,6 +268,53 @@ export default function TodayPage() {
     return logItems.find((item) => item.id === itemId)?.title || "Item no disponible";
   }
 
+  function getLogHref(item: TodayItem) {
+    const params = new URLSearchParams();
+    if (item.module_id) {
+      params.set("module", item.module_id);
+    }
+    params.set("item", item.id);
+    return `/logs?${params.toString()}`;
+  }
+
+  async function handleQuickStatusChange(item: TodayItem, nextStatus: ItemStatus) {
+    if (quickUpdatingId || item.status === nextStatus) {
+      return;
+    }
+
+    const supabase = createSupabaseBrowserClient();
+    setQuickUpdatingId(item.id);
+    setError(null);
+    setActionMessage(null);
+
+    try {
+      const { error: updateError } = await supabase
+        .from("items")
+        .update({
+          status: nextStatus,
+          completed_at: getCompletedAtValue(nextStatus, item.completed_at),
+        })
+        .eq("id", item.id);
+
+      if (updateError) {
+        throw new Error(updateError.message);
+      }
+
+      await refreshItems();
+      setActionMessage(
+        nextStatus === "hecho"
+          ? "Item marcado como hecho desde Hoy."
+          : "Estado actualizado correctamente desde Hoy."
+      );
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "No se pudo actualizar el item.";
+      setError(message);
+    } finally {
+      setQuickUpdatingId(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-white">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -306,6 +383,12 @@ export default function TodayPage() {
           </div>
         )}
 
+        {actionMessage && (
+          <div className="mb-6 rounded-2xl border border-emerald-500/30 bg-emerald-950/40 p-5 text-sm text-emerald-200">
+            {actionMessage}
+          </div>
+        )}
+
         {!loading && !error && hasSession && (
           <>
             <section className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -322,7 +405,13 @@ export default function TodayPage() {
                 emptyMessage="No tienes items en proceso en este momento."
                 count={inProgressItems.length}
               >
-                <ItemList items={inProgressItems} getModuleName={getModuleName} />
+                <ItemList
+                  items={inProgressItems}
+                  getModuleName={getModuleName}
+                  quickUpdatingId={quickUpdatingId}
+                  onQuickStatusChange={handleQuickStatusChange}
+                  getLogHref={getLogHref}
+                />
               </SectionBlock>
 
               <SectionBlock
@@ -331,7 +420,13 @@ export default function TodayPage() {
                 emptyMessage="No tienes items de prioridad alta pendientes hoy."
                 count={highPriorityItems.length}
               >
-                <ItemList items={highPriorityItems} getModuleName={getModuleName} />
+                <ItemList
+                  items={highPriorityItems}
+                  getModuleName={getModuleName}
+                  quickUpdatingId={quickUpdatingId}
+                  onQuickStatusChange={handleQuickStatusChange}
+                  getLogHref={getLogHref}
+                />
               </SectionBlock>
 
               <SectionBlock
@@ -340,7 +435,13 @@ export default function TodayPage() {
                 emptyMessage="No hay items bloqueados ahora mismo."
                 count={blockedItems.length}
               >
-                <ItemList items={blockedItems} getModuleName={getModuleName} />
+                <ItemList
+                  items={blockedItems}
+                  getModuleName={getModuleName}
+                  quickUpdatingId={quickUpdatingId}
+                  onQuickStatusChange={handleQuickStatusChange}
+                  getLogHref={getLogHref}
+                />
               </SectionBlock>
 
               <SectionBlock
@@ -349,7 +450,13 @@ export default function TodayPage() {
                 emptyMessage="No hay revisiones vencidas o cercanas por ahora."
                 count={reviewItems.length}
               >
-                <ReviewList items={reviewItems} getModuleName={getModuleName} />
+                <ReviewList
+                  items={reviewItems}
+                  getModuleName={getModuleName}
+                  quickUpdatingId={quickUpdatingId}
+                  onQuickStatusChange={handleQuickStatusChange}
+                  getLogHref={getLogHref}
+                />
               </SectionBlock>
             </div>
 
@@ -453,47 +560,101 @@ function SectionBlock({
 function ItemList({
   items,
   getModuleName,
+  quickUpdatingId,
+  onQuickStatusChange,
+  getLogHref,
 }: Readonly<{
   items: TodayItem[];
   getModuleName: (moduleId: string | null) => string;
+  quickUpdatingId: string | null;
+  onQuickStatusChange: (item: TodayItem, nextStatus: ItemStatus) => Promise<void>;
+  getLogHref: (item: TodayItem) => string;
 }>) {
   if (items.length === 0) return null;
 
   return (
     <div className="grid gap-4">
-      {items.map((item) => (
-        <article
-          key={item.id}
-          className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
-        >
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                {getModuleName(item.module_id)}
-              </p>
-              <h3 className="mt-2 text-lg font-semibold text-white">{item.title}</h3>
+      {items.map((item) => {
+        const isQuickUpdating = quickUpdatingId === item.id;
+
+        return (
+          <article
+            key={item.id}
+            className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
+          >
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                  {getModuleName(item.module_id)}
+                </p>
+                <h3 className="mt-2 text-lg font-semibold text-white">{item.title}</h3>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClasses[item.status]}`}
+                >
+                  {formatStatusLabel(item.status)}
+                </span>
+                <span
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${priorityClasses[item.priority]}`}
+                >
+                  {capitalize(item.priority)}
+                </span>
+              </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <span
-                className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClasses[item.status]}`}
-              >
-                {formatStatusLabel(item.status)}
-              </span>
-              <span
-                className={`rounded-full border px-3 py-1 text-xs font-medium ${priorityClasses[item.priority]}`}
-              >
-                {capitalize(item.priority)}
-              </span>
+            <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 text-sm text-slate-300">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Siguiente paso</p>
+              <p className="mt-2">{item.next_step || "Sin siguiente paso definido"}</p>
             </div>
-          </div>
 
-          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 text-sm text-slate-300">
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Siguiente paso</p>
-            <p className="mt-2">{item.next_step || "Sin siguiente paso definido"}</p>
-          </div>
-        </article>
-      ))}
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-slate-300">Cambio rapido de estado</span>
+                  <select
+                    value={item.status}
+                    onChange={(event) => onQuickStatusChange(item, event.target.value as ItemStatus)}
+                    disabled={isQuickUpdating}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    <option value="pendiente">Pendiente</option>
+                    <option value="en_proceso">En proceso</option>
+                    <option value="hecho">Hecho</option>
+                    <option value="pausado">Pausado</option>
+                    <option value="bloqueado">Bloqueado</option>
+                  </select>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => onQuickStatusChange(item, "hecho")}
+                  disabled={isQuickUpdating || item.status === "hecho"}
+                  className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isQuickUpdating ? "Guardando..." : "Marcar hecho"}
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-2 lg:justify-end">
+                <Link
+                  href={`/items?item=${item.id}`}
+                  className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-900"
+                >
+                  Ver / editar item
+                </Link>
+                <Link
+                  href={getLogHref(item)}
+                  className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+                >
+                  Crear log
+                </Link>
+              </div>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -501,45 +662,78 @@ function ItemList({
 function ReviewList({
   items,
   getModuleName,
+  quickUpdatingId,
+  onQuickStatusChange,
+  getLogHref,
 }: Readonly<{
   items: TodayItem[];
   getModuleName: (moduleId: string | null) => string;
+  quickUpdatingId: string | null;
+  onQuickStatusChange: (item: TodayItem, nextStatus: ItemStatus) => Promise<void>;
+  getLogHref: (item: TodayItem) => string;
 }>) {
   if (items.length === 0) return null;
 
   return (
     <div className="grid gap-4">
-      {items.map((item) => (
-        <article
-          key={item.id}
-          className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
-        >
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                {getModuleName(item.module_id)}
-              </p>
-              <h3 className="mt-2 text-lg font-semibold text-white">{item.title}</h3>
-            </div>
-            <span
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${priorityClasses[item.priority]}`}
-            >
-              {capitalize(item.priority)}
-            </span>
-          </div>
+      {items.map((item) => {
+        const isQuickUpdating = quickUpdatingId === item.id;
 
-          <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
-            <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Revision</p>
-              <p className="mt-2">{formatReviewLabel(item)}</p>
+        return (
+          <article
+            key={item.id}
+            className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
+          >
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                  {getModuleName(item.module_id)}
+                </p>
+                <h3 className="mt-2 text-lg font-semibold text-white">{item.title}</h3>
+              </div>
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-medium ${priorityClasses[item.priority]}`}
+              >
+                {capitalize(item.priority)}
+              </span>
             </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Siguiente paso</p>
-              <p className="mt-2">{item.next_step || "Sin siguiente paso definido"}</p>
+
+            <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
+              <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Revision</p>
+                <p className="mt-2">{formatReviewLabel(item)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Siguiente paso</p>
+                <p className="mt-2">{item.next_step || "Sin siguiente paso definido"}</p>
+              </div>
             </div>
-          </div>
-        </article>
-      ))}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onQuickStatusChange(item, "en_proceso")}
+                disabled={isQuickUpdating && quickUpdatingId === item.id}
+                className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isQuickUpdating ? "Guardando..." : "Poner en proceso"}
+              </button>
+              <Link
+                href={`/items?item=${item.id}`}
+                className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-900"
+              >
+                Ver / editar item
+              </Link>
+              <Link
+                href={getLogHref(item)}
+                className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
+              >
+                Crear log
+              </Link>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
