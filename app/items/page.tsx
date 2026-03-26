@@ -34,6 +34,7 @@ type ItemRecord = {
   priority: ItemPriority;
   target_date: string | null;
   next_step: string | null;
+  completed_at: string | null;
   created_at: string;
 };
 
@@ -83,6 +84,42 @@ function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function toFormState(item: ItemRecord): ItemFormState {
+  return {
+    moduleId: item.module_id || "",
+    submodule: item.submodule || "",
+    type: item.type,
+    title: item.title,
+    description: item.description || "",
+    status: item.status,
+    priority: item.priority,
+    targetDate: item.target_date || "",
+    nextStep: item.next_step || "",
+  };
+}
+
+function buildItemPayload(form: ItemFormState) {
+  return {
+    module_id: form.moduleId || null,
+    submodule: form.submodule.trim() || null,
+    type: form.type,
+    title: form.title.trim(),
+    description: form.description.trim() || null,
+    status: form.status,
+    priority: form.priority,
+    target_date: form.targetDate || null,
+    next_step: form.nextStep.trim() || null,
+  };
+}
+
+function getCompletedAtValue(nextStatus: ItemStatus, currentCompletedAt: string | null) {
+  if (nextStatus === "hecho") {
+    return currentCompletedAt || new Date().toISOString();
+  }
+
+  return null;
+}
+
 export default function ItemsPage() {
   const supabase = createSupabaseBrowserClient();
 
@@ -90,11 +127,13 @@ export default function ItemsPage() {
   const [items, setItems] = useState<ItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [form, setForm] = useState<ItemFormState>(initialFormState);
 
   useEffect(() => {
@@ -128,6 +167,8 @@ export default function ItemsPage() {
         setUserEmail(null);
         setModules([]);
         setItems([]);
+        setEditingItemId(null);
+        setForm(initialFormState);
         setLoading(false);
         return;
       }
@@ -143,7 +184,7 @@ export default function ItemsPage() {
         supabase
           .from("items")
           .select(
-            "id, module_id, submodule, type, title, description, status, priority, target_date, next_step, created_at"
+            "id, module_id, submodule, type, title, description, status, priority, target_date, next_step, completed_at, created_at"
           )
           .order("created_at", { ascending: false }),
       ]);
@@ -164,7 +205,19 @@ export default function ItemsPage() {
       if (itemsResult.error) {
         setError(itemsResult.error.message);
       } else {
-        setItems((itemsResult.data ?? []) as ItemRecord[]);
+        const nextItems = (itemsResult.data ?? []) as ItemRecord[];
+        setItems(nextItems);
+
+        if (editingItemId) {
+          const activeItem = nextItems.find((item) => item.id === editingItemId);
+          if (!activeItem) {
+            setEditingItemId(null);
+            setForm((current) => ({
+              ...initialFormState,
+              moduleId: current.moduleId || modulesResult.data?.[0]?.id || "",
+            }));
+          }
+        }
       }
 
       setLoading(false);
@@ -184,7 +237,31 @@ export default function ItemsPage() {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [editingItemId, supabase]);
+
+  async function refreshItems() {
+    const { data, error: reloadError } = await supabase
+      .from("items")
+      .select(
+        "id, module_id, submodule, type, title, description, status, priority, target_date, next_step, completed_at, created_at"
+      )
+      .order("created_at", { ascending: false });
+
+    if (reloadError) {
+      throw new Error(reloadError.message);
+    }
+
+    setItems((data ?? []) as ItemRecord[]);
+    return (data ?? []) as ItemRecord[];
+  }
+
+  function resetCreateForm(nextModuleId?: string) {
+    setEditingItemId(null);
+    setForm({
+      ...initialFormState,
+      moduleId: nextModuleId ?? modules[0]?.id ?? "",
+    });
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -192,7 +269,7 @@ export default function ItemsPage() {
     setSuccessMessage(null);
 
     if (!hasSession) {
-      setFormError("Necesitas iniciar sesion para crear items.");
+      setFormError("Necesitas iniciar sesion para gestionar items.");
       return;
     }
 
@@ -203,59 +280,133 @@ export default function ItemsPage() {
 
     setSubmitting(true);
 
-    const {
-      data: { session },
-      error: authError,
-    } = await supabase.auth.getSession();
+    try {
+      const {
+        data: { session },
+        error: authError,
+      } = await supabase.auth.getSession();
 
-    const user = session?.user ?? null;
+      const user = session?.user ?? null;
 
-    if (authError || !user) {
-      setFormError(authError?.message || "Tu sesion no esta disponible.");
+      if (authError || !user) {
+        throw new Error(authError?.message || "Tu sesion no esta disponible.");
+      }
+
+      const payload = buildItemPayload(form);
+
+      if (editingItemId) {
+        const currentItem = items.find((item) => item.id === editingItemId);
+
+        if (!currentItem) {
+          throw new Error("No se encontro el item que intentas editar.");
+        }
+
+        const updatePayload = {
+          ...payload,
+          completed_at: getCompletedAtValue(payload.status, currentItem.completed_at),
+        };
+
+        const { error: updateError } = await supabase
+          .from("items")
+          .update(updatePayload)
+          .eq("id", editingItemId);
+
+        if (updateError) {
+          throw new Error(updateError.message);
+        }
+
+        const refreshedItems = await refreshItems();
+        const updatedItem = refreshedItems.find((item) => item.id === editingItemId);
+
+        if (updatedItem) {
+          setForm(toFormState(updatedItem));
+        }
+
+        setSuccessMessage("Item actualizado correctamente.");
+      } else {
+        const createPayload = {
+          user_id: user.id,
+          ...payload,
+          completed_at: getCompletedAtValue(payload.status, null),
+        };
+
+        const { error: insertError } = await supabase.from("items").insert(createPayload);
+
+        if (insertError) {
+          throw new Error(insertError.message);
+        }
+
+        await refreshItems();
+        resetCreateForm(form.moduleId || modules[0]?.id || "");
+        setSuccessMessage("Item creado correctamente.");
+      }
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "No se pudo guardar el item.";
+      setFormError(message);
+    } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleQuickStatusChange(item: ItemRecord, nextStatus: ItemStatus) {
+    if (quickUpdatingId || item.status === nextStatus) {
       return;
     }
 
-    const payload = {
-      user_id: user.id,
-      module_id: form.moduleId || null,
-      submodule: form.submodule.trim() || null,
-      type: form.type,
-      title: form.title.trim(),
-      description: form.description.trim() || null,
-      status: form.status,
-      priority: form.priority,
-      target_date: form.targetDate || null,
-      next_step: form.nextStep.trim() || null,
-    };
+    setQuickUpdatingId(item.id);
+    setError(null);
+    setSuccessMessage(null);
 
-    const { error: insertError } = await supabase.from("items").insert(payload);
+    try {
+      const { error: updateError } = await supabase
+        .from("items")
+        .update({
+          status: nextStatus,
+          completed_at: getCompletedAtValue(nextStatus, item.completed_at),
+        })
+        .eq("id", item.id);
 
-    if (insertError) {
-      setFormError(insertError.message);
-      setSubmitting(false);
-      return;
+      if (updateError) {
+        throw new Error(updateError.message);
+      }
+
+      const refreshedItems = await refreshItems();
+
+      if (editingItemId === item.id) {
+        const updatedItem = refreshedItems.find((current) => current.id === item.id);
+        if (updatedItem) {
+          setForm(toFormState(updatedItem));
+        }
+      }
+
+      setSuccessMessage(
+        nextStatus === "hecho"
+          ? "Item marcado como hecho."
+          : "Estado actualizado correctamente."
+      );
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : "No se pudo actualizar el estado.";
+      setError(message);
+    } finally {
+      setQuickUpdatingId(null);
     }
+  }
 
-    const { data, error: reloadError } = await supabase
-      .from("items")
-      .select(
-        "id, module_id, submodule, type, title, description, status, priority, target_date, next_step, created_at"
-      )
-      .order("created_at", { ascending: false });
+  function startEditing(item: ItemRecord) {
+    setEditingItemId(item.id);
+    setFormError(null);
+    setSuccessMessage(null);
+    setForm(toFormState(item));
+  }
 
-    if (reloadError) {
-      setFormError(reloadError.message);
-    } else {
-      setItems((data ?? []) as ItemRecord[]);
-      setForm((current) => ({
-        ...initialFormState,
-        moduleId: current.moduleId || modules[0]?.id || "",
-      }));
-      setSuccessMessage("Item creado correctamente.");
-    }
-
-    setSubmitting(false);
+  function cancelEditing() {
+    setFormError(null);
+    setSuccessMessage(null);
+    resetCreateForm(form.moduleId || modules[0]?.id || "");
   }
 
   function updateForm<K extends keyof ItemFormState>(key: K, value: ItemFormState[K]) {
@@ -301,7 +452,7 @@ export default function ItemsPage() {
           <div className="mb-8 rounded-2xl border border-amber-500/30 bg-amber-950/30 p-5 text-amber-100">
             <p className="text-base font-semibold">No hay una sesion activa.</p>
             <p className="mt-2 text-sm text-amber-50/80">
-              Inicia sesion para ver y crear items dentro de tu espacio de trabajo.
+              Inicia sesion para ver y gestionar items dentro de tu espacio de trabajo.
             </p>
             <Link
               href="/login"
@@ -325,16 +476,32 @@ export default function ItemsPage() {
         )}
 
         {!loading && !error && hasSession && (
-          <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+          <div className="grid gap-6 xl:grid-cols-[400px_minmax(0,1fr)]">
             <section className="rounded-3xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
-              <div className="mb-5">
-                <p className="text-sm uppercase tracking-[0.18em] text-slate-500">
-                  Nuevo item
-                </p>
-                <h2 className="mt-2 text-2xl font-semibold">Crear registro</h2>
-                <p className="mt-2 text-sm text-slate-300">
-                  Carga lo minimo necesario para empezar a trabajar hoy.
-                </p>
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm uppercase tracking-[0.18em] text-slate-500">
+                    {editingItemId ? "Edicion" : "Nuevo item"}
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold">
+                    {editingItemId ? "Editar item" : "Crear registro"}
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-300">
+                    {editingItemId
+                      ? "Actualiza el item y guarda cambios sin salir de la pagina."
+                      : "Carga lo minimo necesario para empezar a trabajar hoy."}
+                  </p>
+                </div>
+
+                {editingItemId && (
+                  <button
+                    type="button"
+                    onClick={cancelEditing}
+                    className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-950"
+                  >
+                    Cancelar
+                  </button>
+                )}
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -383,9 +550,7 @@ export default function ItemsPage() {
                   <Field label="Estado">
                     <select
                       value={form.status}
-                      onChange={(event) =>
-                        updateForm("status", event.target.value as ItemStatus)
-                      }
+                      onChange={(event) => updateForm("status", event.target.value as ItemStatus)}
                       className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500"
                     >
                       {ITEM_STATUSES.map((status) => (
@@ -399,9 +564,7 @@ export default function ItemsPage() {
                   <Field label="Prioridad">
                     <select
                       value={form.priority}
-                      onChange={(event) =>
-                        updateForm("priority", event.target.value as ItemPriority)
-                      }
+                      onChange={(event) => updateForm("priority", event.target.value as ItemPriority)}
                       className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500"
                     >
                       {ITEM_PRIORITIES.map((priority) => (
@@ -471,7 +634,13 @@ export default function ItemsPage() {
                   disabled={submitting}
                   className="w-full rounded-xl bg-cyan-500 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {submitting ? "Creando item..." : "Crear item"}
+                  {submitting
+                    ? editingItemId
+                      ? "Guardando cambios..."
+                      : "Creando item..."
+                    : editingItemId
+                      ? "Guardar cambios"
+                      : "Crear item"}
                 </button>
               </form>
             </section>
@@ -496,59 +665,114 @@ export default function ItemsPage() {
                 </div>
               ) : (
                 <div className="grid gap-4">
-                  {items.map((item) => (
-                    <article
-                      key={item.id}
-                      className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 transition hover:border-slate-700"
-                    >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                            {getModuleName(item.module_id)}
-                            {item.submodule ? ` / ${item.submodule}` : ""}
-                          </p>
-                          <h3 className="mt-2 text-lg font-semibold text-white">
-                            {item.title}
-                          </h3>
-                          <p className="mt-2 text-sm text-slate-300">
-                            {item.description || "Sin descripcion"}
-                          </p>
+                  {items.map((item) => {
+                    const isEditing = editingItemId === item.id;
+                    const isQuickUpdating = quickUpdatingId === item.id;
+
+                    return (
+                      <article
+                        key={item.id}
+                        className={`rounded-2xl border p-5 transition ${
+                          isEditing
+                            ? "border-cyan-500/40 bg-slate-950"
+                            : "border-slate-800 bg-slate-950/70 hover:border-slate-700"
+                        }`}
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                              {getModuleName(item.module_id)}
+                              {item.submodule ? ` / ${item.submodule}` : ""}
+                            </p>
+                            <h3 className="mt-2 text-lg font-semibold text-white">
+                              {item.title}
+                            </h3>
+                            <p className="mt-2 text-sm text-slate-300">
+                              {item.description || "Sin descripcion"}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-200">
+                              {capitalize(item.type)}
+                            </span>
+                            <span
+                              className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClasses[item.status]}`}
+                            >
+                              {formatStatusLabel(item.status)}
+                            </span>
+                            <span
+                              className={`rounded-full border px-3 py-1 text-xs font-medium ${priorityClasses[item.priority]}`}
+                            >
+                              {capitalize(item.priority)}
+                            </span>
+                          </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-200">
-                            {capitalize(item.type)}
-                          </span>
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClasses[item.status]}`}
-                          >
-                            {formatStatusLabel(item.status)}
-                          </span>
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-medium ${priorityClasses[item.priority]}`}
-                          >
-                            {capitalize(item.priority)}
-                          </span>
-                        </div>
-                      </div>
+                        <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
+                          <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+                            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                              Siguiente paso
+                            </p>
+                            <p className="mt-2">{item.next_step || "Aun no definido"}</p>
+                          </div>
 
-                      <div className="mt-4 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
-                        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Siguiente paso
-                          </p>
-                          <p className="mt-2">{item.next_step || "Aun no definido"}</p>
+                          <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+                            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                              Fecha objetivo
+                            </p>
+                            <p className="mt-2">{item.target_date || "Sin fecha"}</p>
+                          </div>
                         </div>
 
-                        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3">
-                          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                            Fecha objetivo
-                          </p>
-                          <p className="mt-2">{item.target_date || "Sin fecha"}</p>
+                        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                            <Field label="Cambio rapido de estado">
+                              <select
+                                value={item.status}
+                                onChange={(event) =>
+                                  handleQuickStatusChange(item, event.target.value as ItemStatus)
+                                }
+                                disabled={isQuickUpdating}
+                                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-70"
+                              >
+                                {ITEM_STATUSES.map((status) => (
+                                  <option key={status} value={status}>
+                                    {formatStatusLabel(status)}
+                                  </option>
+                                ))}
+                              </select>
+                            </Field>
+
+                            <button
+                              type="button"
+                              onClick={() => handleQuickStatusChange(item, "hecho")}
+                              disabled={isQuickUpdating || item.status === "hecho"}
+                              className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isQuickUpdating && item.status !== "hecho" ? "Guardando..." : "Marcar hecho"}
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 lg:justify-end">
+                            <button
+                              type="button"
+                              onClick={() => startEditing(item)}
+                              className="rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-500 hover:bg-slate-900"
+                            >
+                              {isEditing ? "Editando" : "Editar"}
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </article>
-                  ))}
+
+                        {item.completed_at && (
+                          <p className="mt-4 text-xs uppercase tracking-[0.16em] text-emerald-300">
+                            Completado: {new Date(item.completed_at).toLocaleString()}
+                          </p>
+                        )}
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -573,3 +797,9 @@ function Field({
     </label>
   );
 }
+
+
+
+
+
+

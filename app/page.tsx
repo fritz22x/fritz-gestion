@@ -21,28 +21,13 @@ export default function HomePage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-
     async function bootstrap() {
       setLoading(true);
       setError(null);
 
       const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (!mounted) return;
-
-      if (sessionError) {
-        setError(sessionError.message);
-        setModules([]);
-        setUserEmail(null);
-        setLoading(false);
-        return;
-      }
-
-      const user = session?.user ?? null;
+        data: { user },
+      } = await supabase.auth.getUser();
 
       if (!user) {
         setModules([]);
@@ -58,8 +43,6 @@ export default function HomePage() {
         .select("id, name, description, sort_order")
         .order("sort_order", { ascending: true });
 
-      if (!mounted) return;
-
       if (error) {
         setError(error.message);
       } else {
@@ -74,16 +57,13 @@ export default function HomePage() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
-      if (mounted) {
-        bootstrap();
-      }
+      bootstrap();
     });
 
     return () => {
-      mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [supabase]);
 
   async function handleSignOut() {
     await signOut();
@@ -140,7 +120,7 @@ export default function HomePage() {
           </div>
         </header>
 
-        {!isLoggedIn && !loading && (
+        {!isLoggedIn && (
           <div className="mb-8 rounded-2xl border border-amber-500/30 bg-amber-950/30 p-5 text-amber-100">
             No has iniciado sesion. Entra con tu usuario para ver tus modulos.
           </div>
