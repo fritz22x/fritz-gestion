@@ -105,6 +105,7 @@ export default function LogsPage() {
     let mounted = true;
 
     async function loadPageData() {
+      const supabase = createSupabaseBrowserClient();
       setLoading(true);
       setError(null);
 
@@ -189,9 +190,10 @@ export default function LogsPage() {
 
     loadPageData();
 
+    const authClient = createSupabaseBrowserClient();
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
+    } = authClient.auth.onAuthStateChange(() => {
       if (mounted) {
         loadPageData();
       }
@@ -633,5 +635,9 @@ function InfoCard({
     </div>
   );
 }
+
+
+
+
 
 
